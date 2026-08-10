@@ -1,0 +1,11 @@
+{
+  "name": "arcanum-trine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tarot reading app with email login, one free reading, and Stripe-backed paid readings/membership.",
+  "dependencies": {
+    "pg": "^8.11.5",
+    "stripe": "^16.8.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
