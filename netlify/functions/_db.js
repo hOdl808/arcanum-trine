@@ -1,24 +1,16 @@
 // Shared Postgres connection pool for Netlify Database.
-// Netlify injects NETLIFY_DATABASE_URL automatically once you enable
-// Netlify Database for this site — you don't set this one yourself.
-const { Pool } = require("pg");
+// getDatabase() from @netlify/database automatically finds and connects to
+// the right database branch for wherever this code is running — no manual
+// connection string needed.
+const { getDatabase } = require("@netlify/database");
 
-let pool;
+let db;
 
 function getPool() {
-  if (!pool) {
-    const connectionString = process.env.NETLIFY_DATABASE_URL;
-    if (!connectionString) {
-      throw new Error(
-        "NETLIFY_DATABASE_URL is not set. Enable Netlify Database for this site (see README)."
-      );
-    }
-    pool = new Pool({
-      connectionString,
-      ssl: { rejectUnauthorized: false },
-    });
+  if (!db) {
+    db = getDatabase();
   }
-  return pool;
+  return db.pool; // a standard pg.Pool, so the rest of our code is unchanged
 }
 
 module.exports = { getPool };
