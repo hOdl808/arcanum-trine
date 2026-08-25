@@ -23,7 +23,7 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "Unknown plan." }) };
   }
 
-  const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+  const stripe = Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-03-31.basil' });
   const priceId =
     type === "membership" ? process.env.STRIPE_PRICE_MEMBERSHIP : process.env.STRIPE_PRICE_SINGLE;
 

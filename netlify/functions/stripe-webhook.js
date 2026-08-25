@@ -5,7 +5,7 @@ const { getPool } = require("./_db");
 // Register its URL (https://YOURSITE/api/stripe-webhook) in the Stripe
 // Dashboard so Stripe knows where to send events. See README.
 exports.handler = async (event) => {
-  const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+  const stripe = Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-03-31.basil' });
   const sig = event.headers["stripe-signature"];
 
   let stripeEvent;

@@ -21,7 +21,7 @@ exports.handler = async (event) => {
       return { statusCode: 400, body: JSON.stringify({ error: "No billing account on file yet." }) };
     }
 
-    const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+    const stripe = Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2025-03-31.basil' });
     const siteUrl = process.env.URL || process.env.DEPLOY_PRIME_URL || "";
     const portalSession = await stripe.billingPortal.sessions.create({
       customer: customerId,
