@@ -248,6 +248,41 @@
   .summary-panel p:last-child{margin-bottom:0;}
   .summary-panel em{color:var(--gold-soft);font-style:italic;}
 
+  /* ---------- share modal ---------- */
+  .share-overlay{
+    position:fixed;inset:0;z-index:50;
+    background:rgba(6,5,13,.86);
+    display:flex;align-items:center;justify-content:center;
+    padding:24px;
+  }
+  .share-card{
+    position:relative;
+    background:linear-gradient(160deg,var(--panel),var(--panel2));
+    border:1px solid rgba(201,161,90,.3);
+    border-radius:16px;
+    padding:22px;
+    max-width:420px;width:100%;
+    max-height:90vh;overflow-y:auto;
+    box-shadow:0 30px 80px rgba(0,0,0,.6);
+    text-align:center;
+  }
+  .share-close{
+    position:absolute;top:10px;right:14px;
+    background:none;border:none;color:var(--dim);
+    font-size:26px;line-height:1;cursor:pointer;
+    padding:4px 8px;
+  }
+  .share-close:hover{color:var(--gold-soft);}
+  .share-preview-wrap{
+    border-radius:10px;overflow:hidden;
+    border:1px solid rgba(201,161,90,.25);
+    margin-bottom:18px;background:#0b0a17;
+  }
+  .share-preview-wrap img{width:100%;display:block;}
+  .share-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+  .share-actions .btn{width:auto;padding:12px 22px;}
+  .share-hint{font-size:13px;color:var(--dim);font-style:italic;margin:14px 0 0;}
+
   .actions{display:flex;justify-content:center;gap:14px;margin-top:34px;flex-wrap:wrap;}
 
   .skip-note{
@@ -390,8 +425,24 @@
     </div>
 
     <div class="actions">
+      <button class="btn" id="shareBtn" onclick="shareReading()">Share This Reading</button>
       <button class="btn ghost" onclick="pullAgain()">Draw Again</button>
       <button class="btn ghost" onclick="startOver()">New Person</button>
+    </div>
+  </div>
+
+  <!-- SHARE MODAL -->
+  <div id="shareModal" class="share-overlay" style="display:none;">
+    <div class="share-card">
+      <button class="share-close" onclick="closeShareModal()">&times;</button>
+      <div class="share-preview-wrap">
+        <img id="sharePreviewImg" alt="Your Arcanum Trine reading">
+      </div>
+      <div class="share-actions">
+        <button class="btn" id="shareNativeBtn" onclick="doNativeShare()" style="display:none;">Share</button>
+        <button class="btn ghost" onclick="downloadShareImage()">Download Image</button>
+      </div>
+      <p class="share-hint">Post it, send it to a friend — every share links back to arcanumtrine.com.</p>
     </div>
   </div>
 
@@ -1031,6 +1082,279 @@ function finishReading(){
   const panel = document.getElementById('summaryPanel');
   document.getElementById('summaryText').innerHTML = summary;
   requestAnimationFrame(()=>panel.classList.add('show'));
+}
+
+/* ---------------- share card generation ---------------- */
+let _shareBlob = null;
+
+function loadImg(src){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+// Simple centered word-wrap for canvas text. Returns the y position after the
+// last line drawn.
+function wrapCenteredText(ctx, text, cx, y, maxWidth, lineHeight){
+  const words = text.split(/\s+/);
+  let line = "";
+  const lines = [];
+  for(const w of words){
+    const test = line ? line + " " + w : w;
+    if(ctx.measureText(test).width > maxWidth && line){
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if(line) lines.push(line);
+  lines.forEach((l, i)=>{
+    ctx.fillText(l, cx, y + i*lineHeight);
+  });
+  return y + lines.length*lineHeight;
+}
+
+function drawRoundedImageCentered(ctx, img, cx, cy, w, h, radius, rotated){
+  ctx.save();
+  ctx.translate(cx, cy);
+  if(rotated) ctx.rotate(Math.PI);
+  const x = -w/2, y = -h/2;
+  ctx.beginPath();
+  ctx.moveTo(x+radius, y);
+  ctx.arcTo(x+w, y, x+w, y+h, radius);
+  ctx.arcTo(x+w, y+h, x, y+h, radius);
+  ctx.arcTo(x, y+h, x, y, radius);
+  ctx.arcTo(x, y, x+w, y, radius);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(img, x, y, w, h);
+  ctx.restore();
+}
+
+// Measures how many lines `text` will wrap into at the given font/width,
+// without drawing anything — used so we can size the canvas to fit before
+// we actually draw (avoids leftover empty space or, worse, overflow).
+function measureWrappedLines(ctx, text, maxWidth){
+  const words = text.split(/\s+/);
+  let line = "";
+  const lines = [];
+  for(const w of words){
+    const test = line ? line + " " + w : w;
+    if(ctx.measureText(test).width > maxWidth && line){
+      lines.push(line);
+      line = w;
+    } else {
+      line = test;
+    }
+  }
+  if(line) lines.push(line);
+  return lines;
+}
+
+async function buildShareCanvas(){
+  await (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve());
+
+  const W = 1080;
+
+  // pull quote — last sentence of the summary, stripped of tags
+  let quote = "";
+  const summaryEl = document.getElementById('summaryText');
+  if(summaryEl){
+    const paras = summaryEl.querySelectorAll('p');
+    if(paras.length) quote = paras[paras.length-1].textContent.trim();
+  }
+  const quoteText = quote ? ('"' + quote + '"') : '';
+
+  // Measure the quote's wrapped line count first (on a scratch canvas) so
+  // we can size the real canvas to fit it exactly — no dead space, no risk
+  // of the quote overflowing into the footer on a long reading.
+  const measureCanvas = document.createElement('canvas');
+  const mctx = measureCanvas.getContext('2d');
+  mctx.font = "italic 30px 'Cormorant Garamond', serif";
+  const quoteLines = quoteText ? measureWrappedLines(mctx, quoteText, 820) : [];
+  const quoteLineHeight = 42;
+  const quoteBlockHeight = quoteLines.length * quoteLineHeight;
+
+  // layout constants
+  const headerBottom = 190;
+  const cardW = 270, cardH = 465;
+  const cardY = headerBottom + 78 + cardH/2; // label(30) + gap(48) above card top
+  const afterCardsY = cardY + cardH/2 + 66 + 40; // name + orientation labels
+  const signLineY = afterCardsY + 40;
+  const quoteStartY = signLineY + 70;
+  const afterQuoteY = quoteStartY + quoteBlockHeight;
+  const footerGap = 70;
+  const footerDividerY = afterQuoteY + footerGap;
+  const footerTextY = footerDividerY + 50;
+  const footerSubY = footerDividerY + 82;
+  const H = footerSubY + 50;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // background
+  const bg = ctx.createRadialGradient(W/2, -100, 100, W/2, H*0.4, H*0.9);
+  bg.addColorStop(0, '#241d43');
+  bg.addColorStop(1, '#0b0a17');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0,0,W,H);
+
+  // scattered stars
+  for(let i=0;i<70;i++){
+    ctx.globalAlpha = Math.random()*0.6+0.1;
+    ctx.fillStyle = '#e0c184';
+    const r = Math.random()*1.8+0.4;
+    ctx.beginPath();
+    ctx.arc(Math.random()*W, Math.random()*H*0.55, r, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // wordmark
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#e0c184';
+  ctx.font = "700 56px 'Cinzel Decorative', 'Cinzel', serif";
+  ctx.fillText('ARCANUM TRINE', W/2, 110);
+
+  ctx.font = "italic 26px 'Cormorant Garamond', serif";
+  ctx.fillStyle = '#a89bc4';
+  ctx.fillText('Three cards. One sky.', W/2, 150);
+
+  ctx.strokeStyle = 'rgba(201,161,90,.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(W/2-90, headerBottom); ctx.lineTo(W/2+90, headerBottom);
+  ctx.stroke();
+
+  // cards
+  const positions = ['Past','Present','Future'];
+  const gap = 36;
+  const totalW = cardW*3 + gap*2;
+  const startX = (W - totalW)/2 + cardW/2;
+
+  for(let i=0;i<3;i++){
+    const card = currentCards[i];
+    const cx = startX + i*(cardW+gap);
+
+    ctx.font = "600 22px 'Cinzel', serif";
+    ctx.fillStyle = '#c9a15a';
+    ctx.textAlign = 'center';
+    ctx.fillText(positions[i].toUpperCase(), cx, cardY - cardH/2 - 30);
+
+    try{
+      const b64 = CARD_IMAGES[card.img];
+      const img = await loadImg('data:image/jpeg;base64,' + b64);
+      drawRoundedImageCentered(ctx, img, cx, cardY, cardW, cardH, 14, card.reversed);
+    }catch(e){ /* skip image if it fails to load */ }
+
+    ctx.strokeStyle = 'rgba(201,161,90,.45)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx-cardW/2, cardY-cardH/2, cardW, cardH);
+
+    ctx.font = "600 21px 'Cinzel', serif";
+    ctx.fillStyle = '#ece3d0';
+    ctx.fillText(card.name, cx, cardY + cardH/2 + 40);
+
+    ctx.font = "italic 18px 'Cormorant Garamond', serif";
+    ctx.fillStyle = card.reversed ? '#c98aa3' : '#8fae7d';
+    ctx.fillText(card.reversed ? 'Reversed' : 'Upright', cx, cardY + cardH/2 + 66);
+  }
+
+  // reading-for line — plain text only (no unicode zodiac glyph), since
+  // astrological symbol rendering is inconsistent across platforms/fonts
+  // and this image needs to look right everywhere it gets shared.
+  const signLabel = currentSign ? currentSign.name : '';
+  ctx.font = "600 30px 'Cinzel Decorative', 'Cinzel', serif";
+  ctx.fillStyle = '#e0c184';
+  ctx.fillText('Reading for ' + currentName + '  ·  ' + signLabel, W/2, signLineY);
+
+  // pull quote
+  if(quoteLines.length){
+    ctx.font = "italic 30px 'Cormorant Garamond', serif";
+    ctx.fillStyle = '#ece3d0';
+    quoteLines.forEach((l,i)=> ctx.fillText(l, W/2, quoteStartY + i*quoteLineHeight));
+  }
+
+  // footer
+  ctx.strokeStyle = 'rgba(201,161,90,.5)';
+  ctx.beginPath();
+  ctx.moveTo(W/2-90, footerDividerY); ctx.lineTo(W/2+90, footerDividerY);
+  ctx.stroke();
+
+  ctx.font = "600 30px 'Cinzel', serif";
+  ctx.fillStyle = '#e0c184';
+  ctx.fillText('ARCANUMTRINE.COM', W/2, footerTextY);
+
+  ctx.font = "italic 22px 'Cormorant Garamond', serif";
+  ctx.fillStyle = '#a89bc4';
+  ctx.fillText('Get your free tarot reading', W/2, footerSubY);
+
+  return canvas;
+}
+
+async function shareReading(){
+  const btn = document.getElementById('shareBtn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing image…';
+
+  try{
+    const canvas = await buildShareCanvas();
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png', 0.95));
+    _shareBlob = blob;
+
+    const url = URL.createObjectURL(blob);
+    document.getElementById('sharePreviewImg').src = url;
+
+    const nativeBtn = document.getElementById('shareNativeBtn');
+    if(navigator.share && navigator.canShare && navigator.canShare({ files: [new File([blob], 'arcanum-trine-reading.png', { type: 'image/png' })] })){
+      nativeBtn.style.display = 'inline-flex';
+    } else {
+      nativeBtn.style.display = 'none';
+    }
+
+    document.getElementById('shareModal').style.display = 'flex';
+  }catch(e){
+    console.error('Share image generation failed:', e);
+    alert("Couldn't prepare the share image — try again in a moment.");
+  }finally{
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function closeShareModal(){
+  document.getElementById('shareModal').style.display = 'none';
+}
+
+function downloadShareImage(){
+  if(!_shareBlob) return;
+  const url = URL.createObjectURL(_shareBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'arcanum-trine-reading.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function doNativeShare(){
+  if(!_shareBlob) return;
+  try{
+    const file = new File([_shareBlob], 'arcanum-trine-reading.png', { type: 'image/png' });
+    await navigator.share({
+      files: [file],
+      title: 'My Arcanum Trine Reading',
+      text: 'I just got a tarot reading from Arcanum Trine — try yours free at arcanumtrine.com'
+    });
+  }catch(e){
+    // user cancelled the share sheet or it failed silently — nothing to do
+  }
 }
 
 async function pullAgain(){
